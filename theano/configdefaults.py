@@ -146,6 +146,13 @@ AddConfigVar(
     in_c_key=False)
 
 
+AddConfigVar(
+    'enable_initial_driver_test',
+    "Tests the nvidia driver when a GPU device is initialized.",
+    BoolParam(True, allow_override=False),
+    in_c_key=False)
+
+
 def default_cuda_root():
     v = os.getenv('CUDA_ROOT', "")
     if v:
@@ -641,6 +648,16 @@ AddConfigVar(
      "to the function. This helps the user track down problems in the "
      "graph before it gets optimized."),
     EnumStr('off', 'ignore', 'warn', 'raise', 'pdb'),
+    in_c_key=False)
+
+
+AddConfigVar(
+    'print_test_value',
+    ("If 'True', the __eval__ of a Theano variable will return its test_value "
+     "when this is available. This has the practical conseguence that, e.g., "
+     "in debugging `my_var` will print the same as `my_var.tag.test_value` "
+     "when a test value is defined."),
+    BoolParam(False),
     in_c_key=False)
 
 

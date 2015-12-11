@@ -4401,6 +4401,11 @@ class Reshape(Op):
         # Here, we only simplify if the shape (node.inputs[1]) is a constant,
         # ideally it would suffice to check that it is always non-negative.
 
+        # If current variable is a scalar and its dimensionality should
+        # change to self.ndim, then use size 1 for all new dimensions.
+        if len(ishapes[0]) == 0:
+            return [(1,) * self.ndim]
+
         requ = node.inputs[1]
         if isinstance(requ, theano.tensor.TensorConstant):
             requ = list(requ.data)
@@ -4412,23 +4417,23 @@ class Reshape(Op):
                     if ele == -1:
                         requ[i] = missing
             elif crit == 1:  # we reshape to -1
-                requ = [mul(*ishapes[0])]
+                requ = [mul(*ishapes[0])] if ishapes[0] else [1]
             elif crit > 1:
                 raise ValueError('shape argument to Reshape.perform'
                                  ' must have at most one entry equal to -1')
             return [requ]
         else:
-            oshape = []
-            for i in xrange(self.ndim):
-                default_os_i = theano.tensor.opt.Shape_i(i)(node.outputs[0])
-                try:
-                    os_i = get_scalar_constant_value(node.inputs[1][i]).item()
-                    if os_i == -1:
-                        os_i = default_os_i
-                except NotScalarConstantError:
-                    os_i = default_os_i
-                oshape.append(os_i)
-            return [tuple(oshape)]
+            new_dims = [node.inputs[1][i] for i in xrange(self.ndim)]
+            # since new_dims has one negative value (-1), the
+            # multiplication of all values should be negated
+            # to give a positive value.
+            # To avoid optimization complexity, we avoid checking
+            # for the case when there are two or more '-1' values.
+            return [tuple([switch(eq(new_dims[i], -1),
+                                  theano.tensor.mul(*ishapes[0]) //
+                                  (-theano.tensor.mul(*new_dims)),
+                                  new_dims[i])
+                           for i in xrange(self.ndim)])]
 
     def c_code_cache_version(self):
         return (6,)
@@ -4506,6 +4511,7 @@ class Flatten(Op):
     Flattens a tensor to `outdim` dimensions by preserving the leading
     outdim - 1 shape components.
 
+    .. note:: The interface Flatten(Op) is deprecated, you should use flatten.
     """
     view_map = {0: [0]}
 
@@ -4513,6 +4519,11 @@ class Flatten(Op):
     __props__ = ("outdim",)
 
     def __init__(self, outdim=1):
+        warnings.warn(
+            "Flatten class is deprecated, "
+            "please use flatten method instead.",
+            DeprecationWarning,
+            stacklevel=4)
         self.outdim = int(outdim)
 
     def __str__(self):
@@ -4651,8 +4662,70 @@ class Flatten(Op):
         """ % locals()
 
 
+def is_flat(var, outdim=1):
+    """
+    Verifies the dimensionality of the var is equal to
+    outdim. This method is usually called after flatten method on a
+    variable, where the first outdim-1 dimension size(s) of the variable
+    is kept intact, and the last dimension size of the variable is made
+    equal to the multiplication of its remaining dimension size(s), such that
+    the variable would end up with as many dimension as outdim.
+
+    Parameters
+    ----------
+        var : theano.tensor.var.TensorVariable
+            the theano var on which the dimensionality is checked.
+
+        outdim : int
+            the expected dimensionality of var.
+
+    Returns
+    -------
+    bool
+        the comparison result of var's dim
+        and the expected outdim.
+    """
+    return var.ndim == outdim
+
+
 def flatten(x, outdim=1):
-    return Flatten(outdim)(x)
+    """
+    Reshapes the variable x by keeping
+    the first outdim-1 dimension size(s) of x the same,
+    and making the last dimension size of x equal to
+    the multiplication of its remaining dimension size(s).
+
+    Parameters
+    ----------
+        x : theano.tensor.var.TensorVariable
+            the variable that should be reshaped.
+
+        outdim : int
+            the number of dimensions of the returned variable
+
+    Returns
+    -------
+    theano.tensor.var.TensorVariable
+        the flattend variable with dimensionality of outdim
+    """
+    # Any input variable can be flattened to have outdim of 1,
+    # even if it's a scalar. Otherwise, outdim must be positive
+    # and smaller than x.ndim.
+    if outdim < 1 or (outdim > 1 and outdim > x.ndim):
+        raise ValueError('outdim %s out of bound [1, %d)'
+                         % (outdim, x.ndim + 1))
+
+    if outdim > 1:
+        dims = tuple(x.shape[:outdim - 1]) + (-1,)
+    else:
+        dims = (-1,)
+    x_reshaped = x.reshape(dims)
+    bcast_kept_dims = x.broadcastable[:outdim - 1]
+    bcast_new_dim = python_all(x.broadcastable[outdim - 1:])
+    broadcastable = bcast_kept_dims + (bcast_new_dim,)
+    x_reshaped = theano.tensor.addbroadcast(
+        x_reshaped, *filter(lambda i: broadcastable[i], range(outdim)))
+    return x_reshaped
 
 
 # class TileGrad(Op):
