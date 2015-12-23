@@ -3,6 +3,7 @@ from __future__ import print_function
 import logging
 
 import numpy
+import scipy.linalg
 from six.moves import xrange
 
 import theano
@@ -502,6 +503,75 @@ class QRFull(Op):
         (q, r) = outputs
         assert x.ndim == 2, "The input of qr function should be a matrix."
         q[0], r[0] = self._numop(x, self.mode)
+
+
+class QRUpdate(Op):
+    """
+    Rank-1 QR update
+
+    If A = Q R is the QR factorization of A, return the QR factorization of
+    A + u v**T for real A or A + u v**H for complex A.
+
+    """
+
+    _numop = staticmethod(scipy.linalg.qr_update)
+    __props__ = ('overwrite_qruv', 'check_finite')
+
+    def __init__(self, overwrite_qruv=False, check_finite=True):
+        self.overwrite_qruv = overwrite_qruv
+        self.check_finite = check_finite
+
+    def make_node(self, q, r, u, v):
+        q = as_tensor_variable(q)
+        r = as_tensor_variable(r)
+        u = as_tensor_variable(u)
+        v = as_tensor_variable(v)
+        assert q.ndim == 2, "Q should be a matrix."
+        assert r.ndim == 2, "R should be a matrix."
+        assert u.ndim == 1, "u should be a vector."
+        assert v.ndim == 1, "v should be a vector."
+        q1 = theano.tensor.matrix(dtype=q.dtype)
+        r1 = theano.tensor.matrix(dtype=r.dtype)
+
+        return Apply(self, [q, r, u, v], [q1, r1])
+
+    def perform(self, node, inputs, outputs):
+        (q, r, u, v) = inputs
+        (q1, r1) = outputs
+        assert q.ndim == 2, "Q should be a matrix."
+        assert r.ndim == 2, "R should be a matrix."
+        assert u.ndim == 1, "u should be a vector."
+        assert v.ndim == 1, "v should be a vector."
+        q1[0], r1[0] = self._numop(q, r, u, v, self.overwrite_qruv, self.check_finite)
+
+def qr_update(q, r, u, v, overwrite_qruv=1, check_finite=1):
+    """
+    This function performs a rank-1 QR update on CPU.
+
+    Parameters
+    ----------
+    Q : (M, M) or (M, N) array_like
+        Unitary/orthogonal matrix from the qr decomposition of A.
+    R : (M, N) or (N, N) array_like
+        Upper triangular matrix from the qr decomposition of A.
+    u : (M,)  array_like
+        Left update vector
+    v : (N,)  array_like
+        Right update vector
+    overwrite_qruv : bool, optional
+        If True, consume Q, R, u, and v, if possible, while performing the update, otherwise make copies as necessary. Defaults to False.
+    check_finite : bool, optional
+        Whether to check that the input matrix contains only finite numbers. Disabling may give a performance gain, but may result in problems (crashes, non-termination) if the inputs do contain infinities or NaNs. Default is True.
+    
+    Returns
+    --------
+    Q1 : ndarray
+        Updated unitary/orthogonal factor
+    R1 : ndarray
+        Updated upper triangular factor
+
+    """
+    return QRUpdate(overwrite_qruv, check_finite)(q, r, u, v)
 
 
 class QRIncomplete(Op):
