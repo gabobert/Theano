@@ -18,7 +18,7 @@ class SRFT(Op):
     """
         Subsampled Randomized Fourrier Transform of a vector
     """
-    __props__ = ('k')
+    __props__ = ('k', 'n')
 
     def __init__(self, k, n):
         self.k = k
@@ -27,8 +27,6 @@ class SRFT(Op):
         self.D = np.sign(np.random.randn(self.n))
         self.srht_const = np.sqrt(self.n / self.k)
         self.S = np.random.choice(self.n, self.k, replace=False)
-        
-        _numop = self.transform_1d
 
 
     def transform_1d(self, x):
@@ -39,13 +37,13 @@ class SRFT(Op):
         x = as_tensor_variable(x)
 
         assert x.ndim == 1, "x should be a vector."
-        Px = theano.tensor.matrix(dtype=x.dtype)
+        Px = theano.tensor.vector(dtype=x.dtype)
 
         return Apply(self, [x], [Px])
 
     def perform(self, node, inputs, outputs):
-        (x) = inputs
-        (Px) = outputs
+        x = inputs[0]
+        Px = outputs[0]
 
         assert x.ndim == 1, "x should be a vector."
-        Px[0] = self._numop(x)
+        Px[0] = self.transform_1d(x)
