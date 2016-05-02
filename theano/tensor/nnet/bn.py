@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import theano
 from theano.scalar import Composite
 from theano.scalar import add, sub, true_div, mul
@@ -6,6 +7,7 @@ from theano.scalar import add, sub, true_div, mul
 class BNComposite(Composite):
     init_param = ('dtype',)
 
+    @theano.configparser.change_flags(compute_test_value='off')
     def __init__(self, dtype):
         self.dtype = dtype
         x = theano.scalar.Scalar(dtype=dtype).make_variable()
@@ -33,7 +35,7 @@ def batch_normalization(inputs, gamma, beta, mean, std,
     """
     This function will build the symbolic graph for applying batch normalization
     to a set of activations.
-    Work also on GPU
+    Also works on GPUs
 
     .. versionadded:: 0.7.1
 

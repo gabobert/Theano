@@ -1,5 +1,9 @@
+from __future__ import absolute_import, print_function, division
 import os.path
+import sys
+from six import reraise
 
+from nose.plugins.skip import SkipTest
 from nose.tools import assert_raises
 import numpy
 
@@ -8,7 +12,9 @@ from theano.compat import PY3
 from theano.misc.pkl_utils import CompatUnpickler
 from theano.sandbox.cuda import cuda_available
 
-if cuda_available:
+if not cuda_available:
+    raise SkipTest('Optional package cuda disabled')
+else:
     from theano.sandbox.cuda import CudaNdarray
 
 # testfile created on cuda enabled machine using
@@ -37,7 +43,18 @@ def test_unpickle_cudandarray_as_numpy_ndarray_flag0():
             else:
                 u = CompatUnpickler(fp)
             if cuda_available:
-                mat = u.load()
+                try:
+                    mat = u.load()
+                except ImportError:
+                    # Windows sometimes fail with nonsensical errors like:
+                    #   ImportError: No module named type
+                    #   ImportError: No module named copy_reg
+                    # when "type" and "copy_reg" are builtin modules.
+                    if sys.platform == 'win32':
+                        exc_type, exc_value, exc_trace = sys.exc_info()
+                        reraise(SkipTest, exc_value, exc_trace)
+                    raise
+
                 assert isinstance(mat, CudaNdarray)
                 assert numpy.asarray(mat)[0] == -42.0
             else:
@@ -59,7 +76,17 @@ def test_unpickle_cudandarray_as_numpy_ndarray_flag1():
                 u = CompatUnpickler(fp, encoding="latin1")
             else:
                 u = CompatUnpickler(fp)
-            mat = u.load()
+            try:
+                mat = u.load()
+            except ImportError:
+                # Windows sometimes fail with nonsensical errors like:
+                #   ImportError: No module named type
+                #   ImportError: No module named copy_reg
+                # when "type" and "copy_reg" are builtin modules.
+                if sys.platform == 'win32':
+                    exc_type, exc_value, exc_trace = sys.exc_info()
+                    reraise(SkipTest, exc_value, exc_trace)
+                raise
 
         assert isinstance(mat, numpy.ndarray)
         assert mat[0] == -42.0

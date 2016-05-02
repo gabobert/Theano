@@ -1,6 +1,9 @@
+from __future__ import absolute_import, print_function, division
+
 from nose.plugins.skip import SkipTest
 from nose.plugins.attrib import attr
 import numpy
+from six import integer_types
 
 import theano
 import theano.tensor as T
@@ -89,14 +92,16 @@ class TestCorr2D(utt.InferShapeTester):
         elif border_mode == 'valid':
             padHW = numpy.array([0, 0])
         elif border_mode == 'half':
-            padHW = numpy.floor(fil_shape2d / 2)
+            padHW = numpy.floor(fil_shape2d / 2).astype('int32')
         elif isinstance(border_mode, tuple):
             padHW = numpy.array(border_mode)
-        elif isinstance(border_mode, int):
+        elif isinstance(border_mode, integer_types):
             padHW = numpy.array([border_mode, border_mode])
         else:
             raise NotImplementedError('Unsupported border_mode {}'.format(border_mode))
         out_shape2d = numpy.floor((img_shape2d + 2 * (padHW) - fil_shape2d) / subsample2d) + 1
+        # avoid numpy deprecation
+        out_shape2d = out_shape2d.astype('int32')
         out_shape = (N_image_shape[0], N_filter_shape[0]) + tuple(out_shape2d)
         ref_output = numpy.zeros(out_shape)
 
@@ -127,7 +132,8 @@ class TestCorr2D(utt.InferShapeTester):
 
         # TEST GRADIENT
         if verify_grad:
-            utt.verify_grad(sym_CorrMM, [orig_image_data, filter_data])
+            utt.verify_grad(sym_CorrMM, [orig_image_data, filter_data],
+                            mode=self.mode)
 
     @attr('slow')
     def test_basic(self):
@@ -230,6 +236,8 @@ class TestCorr2D(utt.InferShapeTester):
 
     @attr('slow')
     def test_infer_shape_forward(self):
+        if theano.config.mode == "FAST_COMPILE":
+            raise SkipTest("CorrMM don't work in FAST_COMPILE")
 
         def rand(*shape):
             r = numpy.asarray(numpy.random.rand(*shape), dtype='float64')
@@ -259,6 +267,8 @@ class TestCorr2D(utt.InferShapeTester):
 
     @attr('slow')
     def test_infer_shape_gradW(self):
+        if theano.config.mode == "FAST_COMPILE":
+            raise SkipTest("CorrMM don't work in FAST_COMPILE")
 
         def rand(*shape):
             r = numpy.asarray(numpy.random.rand(*shape), dtype='float64')
@@ -295,6 +305,8 @@ class TestCorr2D(utt.InferShapeTester):
 
     @attr('slow')
     def test_infer_shape_gradI(self):
+        if theano.config.mode == "FAST_COMPILE":
+            raise SkipTest("CorrMM don't work in FAST_COMPILE")
 
         def rand(*shape):
             r = numpy.asarray(numpy.random.rand(*shape), dtype='float64')

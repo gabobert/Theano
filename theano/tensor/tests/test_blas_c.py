@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import sys
 import numpy
 from unittest import TestCase
@@ -12,7 +13,6 @@ from theano.tensor.blas_scipy import ScipyGer
 from theano.tensor.blas import Ger
 
 from theano.tensor.blas_c import CGemv
-from theano.tensor.blas_scipy import ScipyGer
 from theano.tensor.blas import Gemv
 
 from theano.tensor.blas_c import check_force_gemv_init
@@ -131,6 +131,16 @@ class TestCGemv(TestCase, TestOptimizationMixin):
         # scalar
         self.a = tensor.tensor(dtype=dtype, broadcastable=())
 
+    def test_nan_beta_0(self):
+        f = theano.function([self.A, self.x, self.y, self.a],
+                            self.a*self.y + theano.dot(self.A, self.x),
+                            mode=self.mode)
+        Aval = numpy.ones((3, 1), dtype=self.dtype)
+        xval = numpy.ones((1,), dtype=self.dtype)
+        yval = float('NaN') * numpy.ones((3,), dtype=self.dtype)
+        zval = f(Aval, xval, yval, 0)
+        assert not numpy.isnan(zval).any()
+
     def test_optimizations_vm(self):
         ''' Test vector dot matrix '''
         f = theano.function([self.x, self.A],
@@ -141,7 +151,7 @@ class TestCGemv(TestCase, TestOptimizationMixin):
         self.assertFunctionContains0(f, tensor.dot)
         self.assertFunctionContains1(
             f,
-            CGemv(inplace=True, force_init_beta=True)
+            CGemv(inplace=True)
         )
 
         # Assert they produce the same output
@@ -162,7 +172,7 @@ class TestCGemv(TestCase, TestOptimizationMixin):
         self.assertFunctionContains0(f, tensor.dot)
         self.assertFunctionContains1(
             f,
-            CGemv(inplace=True, force_init_beta=True)
+            CGemv(inplace=True)
         )
 
         # Assert they produce the same output

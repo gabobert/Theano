@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import numpy as np
 import numpy
 import warnings
@@ -7,7 +8,9 @@ import theano
 from theano.tensor import basic
 from theano.tensor import nlinalg  # noqa
 from theano import gof, scalar
-from theano.gradient import DisconnectedType
+from theano.gof import Generic
+from theano import gradient
+from theano.gradient import DisconnectedType, disconnected_type
 tensor = basic
 
 
@@ -33,6 +36,9 @@ class CpuContiguous(theano.Op):
             x = x.copy()
         assert x.flags['C_CONTIGUOUS']
         y[0] = x
+
+    def grad(self, inputs, dout):
+        return [theano.tensor.as_tensor_variable(dout[0])]
 
     def c_code(self, node, name, inames, onames, sub):
         x, = inames
@@ -62,6 +68,168 @@ class CpuContiguous(theano.Op):
         return (1,)
 
 cpu_contiguous = CpuContiguous()
+
+
+class SearchsortedOp(theano.Op):
+    """Wrapper of numpy.searchsorted.
+
+    For full documentation, see :func:`searchsorted`.
+
+    See Also
+    --------
+    searchsorted : numpy-like function to use the SearchsortedOp
+
+    """
+
+    params_type = Generic()
+    __props__ = ("side", )
+
+    def __init__(self, side='left'):
+        if side == 'left' or side == 'right':
+            self.side = side
+        else:
+            raise ValueError('\'%(side)s\' is an invalid value for keyword \'side\''
+                             % locals())
+
+    def get_params(self, node):
+        return self.side
+
+    def make_node(self, x, v, sorter=None):
+        x = basic.as_tensor(x, ndim=1)
+        v = basic.as_tensor(v)
+        out_type = v.type.clone(dtype='int64')
+        if sorter is None:
+            return theano.Apply(self, [x, v], [out_type()])
+        else:
+            sorter = basic.as_tensor(sorter, ndim=1)
+            if sorter.type not in basic.int_vector_types:
+                raise TypeError('sorter must be an integer vector',
+                                sorter.type)
+            return theano.Apply(self, [x, v, sorter], [out_type()])
+
+    def infer_shape(self, node, shapes):
+        return [shapes[1]]
+
+    def perform(self, node, inputs, output_storage, params):
+        x = inputs[0]
+        v = inputs[1]
+        if len(node.inputs) == 3:
+            sorter = inputs[2]
+        else:
+            sorter = None
+        z = output_storage[0]
+
+        z[0] = np.searchsorted(x, v, side=params, sorter=sorter)
+
+    def c_support_code_struct(self, node, name):
+        return """
+            int right_%(name)s;
+        """ % locals()
+
+    def c_init_code_struct(self, node, name, sub):
+        side = sub['params']
+        fail = sub['fail']
+        return """
+            PyObject* tmp_%(name)s = PyUnicode_FromString("right");
+            if (tmp_%(name)s == NULL)
+                %(fail)s;
+            right_%(name)s = PyUnicode_Compare(%(side)s, tmp_%(name)s);
+            Py_DECREF(tmp_%(name)s);
+        """ % locals()
+
+    def c_code(self, node, name, inames, onames, sub):
+        sorter = None
+        if len(node.inputs) == 3:
+            x, v, sorter = inames
+        else:
+            x, v = inames
+        if not sorter:
+            sorter = "NULL"
+        z, = onames
+        fail = sub['fail']
+
+        return """
+            Py_XDECREF(%(z)s);
+            %(z)s = (PyArrayObject*) PyArray_SearchSorted(%(x)s, (PyObject*) %(v)s,
+                                                          right_%(name)s ? NPY_SEARCHLEFT : NPY_SEARCHRIGHT, (PyObject*) %(sorter)s);
+            if (!%(z)s)
+                %(fail)s;
+        """ % locals()
+
+    def c_code_cache_version(self):
+        return (1,)
+
+    def grad(self, inputs, output_gradients):
+        num_ins = len(inputs)
+        if num_ins == 3:
+            x, v, sorter = inputs
+        else:
+            x, v = inputs
+
+        x_grad = gradient._float_zeros_like(x)
+        v_grad = gradient._float_zeros_like(v)
+        if num_ins == 3:
+            return [x_grad, v_grad, disconnected_type()]
+        else:
+            return [x_grad, v_grad]
+
+
+def searchsorted(x, v, side='left', sorter=None):
+    """Find indices where elements should be inserted to maintain order.
+
+    Wrapping of numpy.searchsorted. Find the indices into a sorted array
+    `x` such that, if the corresponding elements in `v` were inserted
+    before the indices, the order of `x` would be preserved.
+
+    Parameters
+    ----------
+    x: 1-D tensor (array-like)
+        Input array. If `sorter` is None, then it must be sorted in
+        ascending order, otherwise `sorter` must be an array of indices
+        which sorts it.
+    v: tensor (array-like)
+        Contains the values to be inserted into `x`.
+    side: {'left', 'right'}, optional.
+        If 'left' (default), the index of the first suitable
+        location found is given. If 'right', return the last such index. If
+        there is no suitable index, return either 0 or N (where N is the length
+        of `x`).
+    sorter: 1-D tensor of integers (array-like), optional
+        Contains indices that sort array `x` into ascending order.
+        They are typically the result of argsort.
+
+    Returns
+    -------
+    indices : tensor of integers (int64)
+        Array of insertion points with the same shape as `v`.
+
+    See Also
+    --------
+    `numpy.searchsorted <https://docs.scipy.org/doc/numpy-1.10.0/reference/generated/numpy.searchsorted.html>`_
+
+    Notes
+    -----
+    * Binary search is used to find the required insertion points.
+    * This Op is working **only on CPU** currently.
+
+    Examples
+    --------
+    >>> from theano import tensor
+    >>> x = tensor.dvector()
+    >>> idx = x.searchsorted(3)
+    >>> idx.eval({x: [1,2,3,4,5]})
+    array(2)
+    >>> tensor.extra_ops.searchsorted([1,2,3,4,5], 3).eval()
+    array(2)
+    >>> tensor.extra_ops.searchsorted([1,2,3,4,5], 3, side='right').eval()
+    array(3)
+    >>> tensor.extra_ops.searchsorted([1,2,3,4,5], [-10, 10, 2, 3]).eval()
+    array([0, 5, 1, 2])
+
+    .. versionadded:: 0.9
+
+    """
+    return SearchsortedOp(side=side)(x, v, sorter)
 
 
 class CumsumOp(theano.Op):
@@ -416,12 +584,12 @@ class BinCountOp(theano.Op):
         # Some dtypes are not supported by numpy's implementation of bincount.
         # Until another one is available, we should fail at graph construction
         # time, not wait for execution.
-        int_bitwidth = theano.gof.python_int_bitwidth()
+        int_bitwidth = theano.configdefaults.python_int_bitwidth()
         if int_bitwidth == 64:
             numpy_unsupported_dtypes = ('uint64',)
         if int_bitwidth == 32:
             numpy_unsupported_dtypes = ('uint32', 'int64', 'uint64')
-        intp_bitwidth = theano.gof.local_bitwidth()
+        intp_bitwidth = theano.configdefaults.local_bitwidth()
         if intp_bitwidth == 32:
             out_type = basic.ivector()
         elif intp_bitwidth == 64:
@@ -504,18 +672,6 @@ def bincount(x, weights=None, minlength=None, assert_nonneg=False):
     .. versionadded:: 0.6
 
     """
-    compatible_type = ('int8', 'int16', 'int32', 'int64',
-                       'uint8', 'uint16', 'uint32')
-    unsupported_dtypes = ('uint64',)
-
-    if x.dtype in unsupported_dtypes:
-            raise TypeError(
-                ("Input dtype %s is not supported, "
-                 % unsupported_dtypes), x.dtype)
-
-    if x.dtype not in compatible_type:
-        raise TypeError("Inputs dtype must be an integer.")
-
     if x.ndim != 1:
         raise TypeError("Inputs must be of dimension 1.")
 
@@ -610,7 +766,7 @@ class RepeatOp(theano.Op):
         # Some dtypes are not supported by numpy's implementation of repeat.
         # Until another one is available, we should fail at graph construction
         # time, not wait for execution.
-        ptr_bitwidth = theano.gof.local_bitwidth()
+        ptr_bitwidth = theano.configdefaults.local_bitwidth()
         if ptr_bitwidth == 64:
             numpy_unsupported_dtypes = ('uint64',)
         if ptr_bitwidth == 32:
@@ -737,6 +893,9 @@ def repeat(x, repeats, axis=None):
     else:
         if repeats.ndim == 1:
             repeats = repeats[0]
+
+        if x.dtype == 'uint64':
+            raise TypeError("theano.tensor.repeat don't support dtype uint64")
 
         if axis is None:
             axis = 0

@@ -4,6 +4,8 @@ building class (:class:`FromFunctionOp`) and decorator (:func:`as_op`) that
 help make new Ops more rapidly.
 
 """
+from __future__ import absolute_import, print_function, division
+
 import copy
 import six.moves.cPickle as pickle
 import warnings
@@ -11,7 +13,7 @@ import warnings
 import theano
 from theano import gof
 from theano.compat import OrderedDict
-from six import iteritems
+from six import iteritems, integer_types
 from six.moves import xrange
 
 
@@ -518,16 +520,6 @@ class FromFunctionOp(gof.Op):
     def __str__(self):
         return 'FromFunctionOp{%s}' % self.__fn.__name__
 
-    def make_node(self, *inputs):
-        if len(inputs) != len(self.itypes):
-            raise ValueError("We expected %d inputs but got %d." %
-                             (len(self.itypes), len(inputs)))
-        if not all(inp.type == it for inp, it in zip(inputs, self.itypes)):
-            raise TypeError(
-                "We expected inputs of types '%s' but got types '%s' " %
-                (str([inp.type for inp in inputs]), str(self.itypes)))
-        return theano.Apply(self, inputs, [o() for o in self.otypes])
-
     def perform(self, node, inputs, outputs):
         outs = self.__fn(*inputs)
         if not isinstance(outs, (list, tuple)):
@@ -657,11 +649,13 @@ class Rebroadcast(gof.Op):
         items = sorted(axis)
         self.axis = OrderedDict(items)
         for axis, broad in iteritems(self.axis):
-            assert isinstance(axis, (numpy.integer, int)), (
-                "Rebroadcast needs integer axes. Got ", axis)
-            assert isinstance(broad, bool), (
-                "Rebroadcast needs bool for new broadcast pattern. Got ",
-                broad)
+            if not isinstance(axis, (numpy.integer, integer_types)):
+                raise TypeError("Rebroadcast needs integer axes. "
+                                "Got {}".format(axis))
+
+            if not isinstance(broad, (numpy.bool_, bool)):
+                raise TypeError("Rebroadcast needs bool for new broadcast "
+                                "pattern. Got {}".format(broad))
 
     def __hash__(self):
         # Need special __hash__ as dict aren't hashable.

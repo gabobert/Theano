@@ -17,6 +17,9 @@
 # is relative to the documentation root, use os.path.abspath to make it
 # absolute, like shown here.
 #sys.path.append(os.path.abspath('some/directory'))
+
+from __future__ import absolute_import, print_function, division
+
 import os
 import sys
 theano_path = os.path.join(os.path.dirname(__file__), os.pardir)
@@ -51,15 +54,15 @@ master_doc = 'index'
 
 # General substitutions.
 project = 'Theano'
-copyright = '2008--2015, LISA lab'
+copyright = '2008--2016, LISA lab'
 
 # The default replacements for |version| and |release|, also used in various
 # other places throughout the built documents.
 #
 # The short X.Y version.
-version = '0.7'
+version = '0.8'
 # The full version, including alpha/beta/rc tags.
-release = '0.7'
+release = '0.8.0'
 
 # There are two options for replacing |today|: either, you set today to some
 # non-false value, then it is used:

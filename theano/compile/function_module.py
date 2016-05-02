@@ -2,7 +2,7 @@
 Driver of graph construction, optimization, and linking.
 
 """
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 
 import copy
 from six import string_types, iteritems, iterkeys
@@ -199,7 +199,7 @@ def std_fgraph(input_specs, output_specs, accept_inplace=False):
     return fgraph, list(map(SymbolicOutput, updates))
 
 
-std_fgraph.features = [gof.toolbox.PreserveNames]
+std_fgraph.features = [gof.toolbox.PreserveVariableAttributes]
 
 
 class AliasedMemoryError(Exception):
@@ -586,7 +586,8 @@ class Function(object):
 
         Returns
         -------
-        Copied theano.Function
+        theano.Function
+            Copied theano.Function
         """
         # helper function
         def checkSV(sv_ori, sv_rpl):
@@ -713,7 +714,13 @@ class Function(object):
 
         f_cpy = maker.__class__(inputs=ins, outputs=outs, fgraph=fg_cpy,
                                 mode=maker.mode, profile=profile,
-                                on_unused_input=maker.on_unused_input,
+                                # When removing updates containing variables
+                                # not used in the output function, copy
+                                # generates an unused implicit input.
+                                # We ignore the resulting errors,
+                                # but could change it to 'warn' if this might
+                                # cause problems.
+                                on_unused_input='ignore',
                                 function_builder=maker.function_builder,
                                 # As this is an optimized graph, it
                                 # can contain inplace. DebugMode check
@@ -752,8 +759,36 @@ class Function(object):
         return f_cpy
 
     def __call__(self, *args, **kwargs):
+        """
+        Evaluates value of a function on given arguments.
+
+        Parameters
+        ----------
+        args : list
+            List of inputs to the function. All inputs are required, even when
+            some of them are not necessary to calculate requested subset of
+            outputs.
+
+        kwargs : dict
+            The function inputs can be passed as keyword argument. For this, use
+            the name of the input or the input instance as the key.
+            Keyword argument ``output_subset`` is a list of either indices of the
+            function's outputs or the keys belonging to the `output_keys` dict
+            and represent outputs that are requested to be calculated.
+
+        Returns
+        -------
+        list
+            List of outputs on indices/keys from ``output_subset`` or all of them,
+            if ``output_subset`` is not passed.
+        """
         profile = self.profile
         t0 = time.time()
+
+        output_subset = kwargs.pop('output_subset', None)
+        if output_subset is not None and self.output_keys is not None:
+            output_subset =\
+                [self.output_keys.index(key) for key in output_subset]
 
         # Reinitialize each container's 'provided' counter
         if self.trust_input:
@@ -856,7 +891,9 @@ class Function(object):
         # Do the actual work
         t0_fn = time.time()
         try:
-            outputs = self.fn()
+            outputs =\
+                self.fn() if output_subset is None else\
+                self.fn(output_subset=output_subset)
         except Exception:
             if hasattr(self.fn, 'position_of_error'):
                 # this is a new vm-provided function or c linker
@@ -928,10 +965,13 @@ class Function(object):
             profile.fct_call_time += dt_call
             if hasattr(self.fn, 'update_profile'):
                 self.fn.update_profile(profile)
-
+            if profile.ignore_first_call:
+                profile.reset()
+                profile.ignore_first_call = False
         if self.return_none:
             return None
-        elif self.unpack_single and len(outputs) == 1:
+        elif self.unpack_single and len(outputs) == 1 and\
+                output_subset is None:
             return outputs[0]
         else:
 
@@ -939,9 +979,16 @@ class Function(object):
 
                 assert len(self.output_keys) == len(outputs)
 
-                return dict(izip(self.output_keys, outputs))
+                if output_subset is None:
+                    return dict(izip(self.output_keys, outputs))
+                else:
+                    return dict((self.output_keys[index], outputs[index])
+                                for index in output_subset)
 
-            return outputs
+            if output_subset is None:
+                return outputs
+            else:
+                return [outputs[i] for i in output_subset]
 
     value = property(
         lambda self: self._value,
@@ -967,9 +1014,14 @@ class Function(object):
             for node in self.nodes_with_inner_function:
                 ops_with_inner_function[node.op].free()
 
+    def get_shared(self):
+        """
+        Return the shared variable read or updated by by this function.
+        """
+        return [i.variable for i in self.maker.inputs if i.implicit]
+
 
 # pickling/deepcopy support for Function
-
 def _pickle_Function(f):
     # copy of the input storage list
     ins = list(f.input_storage)
@@ -1214,22 +1266,17 @@ class FunctionMaker(object):
                 print('graph_db already exists')
             else:
                 # create graph_db
-                f = open(graph_db_file, 'wb')
-                print('create new graph_db in %s' % graph_db_file)
-                # file needs to be open and closed for every pickle
-                f.close()
+                with open(graph_db_file, 'wb') as f:
+                    print('create new graph_db in %s' % graph_db_file)
             # load the graph_db dictionary
             try:
-                f = open(graph_db_file, 'rb')
-                # Temporary hack to allow
-                # theano.scan_module.tests.test_scan.T_Scan to
-                # finish. Should be changed in definitive version.
-                tmp = theano.config.unpickle_function
-                theano.config.unpickle_function = False
-                graph_db = pickle.load(f)
-
-                # hack end
-                f.close()
+                with open(graph_db_file, 'rb') as f:
+                    # Temporary hack to allow
+                    # theano.scan_module.tests.test_scan.T_Scan to
+                    # finish. Should be changed in definitive version.
+                    tmp = theano.config.unpickle_function
+                    theano.config.unpickle_function = False
+                    graph_db = pickle.load(f)
                 print('graph_db loaded and it is not empty')
             except EOFError as e:
                 # the file has nothing in it
@@ -1358,9 +1405,8 @@ class FunctionMaker(object):
             before_opt = self.fgraph.clone(check_integrity=False)
             optimizer_profile = optimizer(self.fgraph)
             graph_db.update({before_opt: self.fgraph})
-            f = open(graph_db_file, 'wb')
-            pickle.dump(graph_db, f, -1)
-            f.close()
+            with open(graph_db_file, 'wb') as f:
+                pickle.dump(graph_db, f, -1)
             print('new graph saved into graph_db')
         release_lock()
         return optimizer_profile

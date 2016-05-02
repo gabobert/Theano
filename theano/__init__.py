@@ -21,6 +21,7 @@ which may be rendered with Sphinx. A rendered version is
 maintained at http://www.deeplearning.net/software/theano/library/
 
 """
+from __future__ import absolute_import, print_function, division
 
 __docformat__ = "restructuredtext en"
 
@@ -36,10 +37,10 @@ logging_default_handler.setFormatter(logging_default_formatter)
 theano_logger.addHandler(logging_default_handler)
 theano_logger.setLevel(logging.WARNING)
 
-from theano.configdefaults import config
-
 # Version information.
 from theano.version import version as __version__
+
+from theano.configdefaults import config
 
 # This is the api version for ops that generate C code.  External ops
 # might need manual changes if this number goes up.  An undefined

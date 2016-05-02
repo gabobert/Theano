@@ -1,16 +1,17 @@
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 import distutils
 import logging
 import os
 import subprocess
 import sys
 import warnings
+from locale import getpreferredencoding
 
 import numpy
 
 from theano import config
-from theano.compat import decode, decode_iter
-from theano.gof import local_bitwidth
+from theano.compat import decode, decode_with
+from theano.configdefaults import local_bitwidth
 from theano.gof.utils import hash_from_file
 from theano.gof.cmodule import (std_libs, std_lib_dirs,
                                 std_include_dirs, dlimport,
@@ -188,6 +189,10 @@ class NVCC_compiler(Compiler):
         Otherwise nvcc never finish.
 
         """
+        # Remove empty string directory
+        include_dirs = [d for d in include_dirs if d]
+        lib_dirs = [d for d in lib_dirs if d]
+
         rpaths = list(rpaths)
 
         if sys.platform == "win32":
@@ -203,6 +208,9 @@ class NVCC_compiler(Compiler):
             preargs = list(preargs)
         if sys.platform != 'win32':
             preargs.append('-fPIC')
+        if config.cmodule.remove_gxx_opt:
+            preargs = [p for p in preargs if not p.startswith('-O')]
+
         cuda_root = config.cuda.root
 
         # The include dirs gived by the user should have precedence over
@@ -211,34 +219,36 @@ class NVCC_compiler(Compiler):
         if os.path.abspath(os.path.split(__file__)[0]) not in include_dirs:
             include_dirs.append(os.path.abspath(os.path.split(__file__)[0]))
 
-        libs = std_libs() + libs
+        libs = libs + std_libs()
         if 'cudart' not in libs:
             libs.append('cudart')
 
-        lib_dirs = std_lib_dirs() + lib_dirs
-        if any(ld == os.path.join(cuda_root, 'lib') or
-               ld == os.path.join(cuda_root, 'lib64') for ld in lib_dirs):
-            warnings.warn("You have the cuda library directory in your "
-                          "lib_dirs. This has been known to cause problems "
-                          "and should not be done.")
+        lib_dirs = lib_dirs + std_lib_dirs()
+
+        if sys.platform != 'darwin':
+            # config.dnn.include_path add this by default for cudnn in the
+            # new back-end. This should not be used in this back-end. So
+            # just remove them.
+            lib_dirs = [ld for ld in lib_dirs if
+                        not(ld == os.path.join(cuda_root, 'lib') or
+                            ld == os.path.join(cuda_root, 'lib64'))]
 
         if sys.platform != 'darwin':
             # sometimes, the linker cannot find -lpython so we need to tell it
             # explicitly where it is located
             # this returns somepath/lib/python2.x
-            python_lib = distutils.sysconfig.get_python_lib(plat_specific=1, \
-                            standard_lib=1)
+            python_lib = distutils.sysconfig.get_python_lib(plat_specific=1,
+                                                            standard_lib=1)
             python_lib = os.path.dirname(python_lib)
             if python_lib not in lib_dirs:
                 lib_dirs.append(python_lib)
 
         cppfilename = os.path.join(location, 'mod.cu')
-        cppfile = open(cppfilename, 'w')
+        with open(cppfilename, 'w') as cppfile:
 
-        _logger.debug('Writing module C++ code to %s', cppfilename)
+            _logger.debug('Writing module C++ code to %s', cppfilename)
+            cppfile.write(src_code)
 
-        cppfile.write(src_code)
-        cppfile.close()
         lib_filename = os.path.join(location, '%s.%s' %
                 (module_name, get_lib_extension()))
 
@@ -248,7 +258,14 @@ class NVCC_compiler(Compiler):
         # '--gpu-code=compute_13',
         # nvcc argument
         preargs1 = []
+        preargs2 = []
         for pa in preargs:
+            if pa.startswith('-Wl,'):
+                # the -rpath option is not understood by the Microsoft linker
+                if sys.platform != 'win32' or not pa.startswith('-Wl,-rpath'):
+                    preargs1.append('-Xlinker')
+                    preargs1.append(pa[4:])
+                continue
             for pattern in ['-O', '-arch=', '-ccbin=', '-G', '-g', '-I',
                             '-L', '--fmad', '--ftz', '--maxrregcount',
                             '--prec-div', '--prec-sqrt',  '--use_fast_math',
@@ -258,8 +275,9 @@ class NVCC_compiler(Compiler):
 
                 if pa.startswith(pattern):
                     preargs1.append(pa)
-        preargs2 = [pa for pa in preargs
-                    if pa not in preargs1]  # other arguments
+                    break
+            else:
+                preargs2.append(pa)
 
         # Don't put -G by default, as it slow things down.
         # We aren't sure if -g slow things down, so we don't put it by default.
@@ -342,7 +360,10 @@ class NVCC_compiler(Compiler):
             os.chdir(location)
             p = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            nvcc_stdout, nvcc_stderr = decode_iter(p.communicate()[:2])
+            nvcc_stdout_raw, nvcc_stderr_raw = p.communicate()[:2]
+            console_encoding = getpreferredencoding()
+            nvcc_stdout = decode_with(nvcc_stdout_raw, console_encoding)
+            nvcc_stderr = decode_with(nvcc_stderr_raw, console_encoding)
         finally:
             os.chdir(orig_dir)
 
@@ -383,7 +404,8 @@ class NVCC_compiler(Compiler):
         elif config.cmodule.compilation_warning and nvcc_stdout:
             print(nvcc_stdout)
 
-        if nvcc_stdout:
+        # On Windows, nvcc print useless stuff by default
+        if sys.platform != 'win32' and nvcc_stdout:
             # this doesn't happen to my knowledge
             print("DEBUG: nvcc STDOUT", nvcc_stdout, file=sys.stderr)
 

@@ -51,6 +51,8 @@ c_set_tensorNd(PyGpuArrayObject *var, cudnnTensorDescriptor_t desc) {
 static int
 c_set_filter(PyGpuArrayObject *var, cudnnFilterDescriptor_t desc) {
   cudnnDataType_t dt;
+  cudnnStatus_t err;
+
   if (!GpuArray_IS_C_CONTIGUOUS(&var->ga)) {
     PyErr_SetString(PyExc_ValueError,
 		    "Only contiguous filters (kernels) are supported.");
@@ -86,7 +88,12 @@ c_set_filter(PyGpuArrayObject *var, cudnnFilterDescriptor_t desc) {
     dims[i] = PyGpuArray_DIM(var, i);
   }
 
-  cudnnStatus_t err = cudnnSetFilterNdDescriptor(desc, dt, nd, dims);
+#if CUDNN_VERSION >= 5000
+    err = cudnnSetFilterNdDescriptor(desc, dt, CUDNN_TENSOR_NCHW, nd, dims);
+#else
+    err = cudnnSetFilterNdDescriptor(desc, dt, nd, dims);
+#endif
+
   if (err != CUDNN_STATUS_SUCCESS) {
     PyErr_Format(PyExc_RuntimeError,
 		 "Could not set filter descriptor: %s.",
@@ -102,11 +109,16 @@ setup_ext_cuda();
 
 #section support_code_struct
 
+PyGpuContextObject *ctx;
 cudnnHandle_t APPLY_SPECIFIC(_handle);
 
 #section init_code_struct
 
 {
+  // We need to keep a reference here to have it available in the destructor.
+  ctx = PARAMS;
+  Py_INCREF(ctx);
+
   cuda_enter(PARAMS->ctx);
   cudnnStatus_t err;
   APPLY_SPECIFIC(_handle) = NULL;
@@ -128,4 +140,7 @@ cudnnHandle_t APPLY_SPECIFIC(_handle);
 
 #section cleanup_code_struct
 
+cuda_enter(ctx->ctx);
 cudnnDestroy(APPLY_SPECIFIC(_handle));
+cuda_exit(ctx->ctx);
+Py_DECREF((PyObject *)ctx);

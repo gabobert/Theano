@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 from theano import scalar as scal
 from . import elemwise
 from theano import printing
@@ -282,6 +283,16 @@ def psi_inplace(a):
 @_scal_inplace
 def chi2sf_inplace(x, k):
     """chi squared survival function"""
+
+
+@_scal_inplace
+def j0_inplace(a):
+    """Bessel function of the 0'th kind"""
+
+
+@_scal_inplace
+def j1_inplace(a):
+    """Bessel function of the 0'th kind"""
 
 
 @_scal_inplace

@@ -5,6 +5,8 @@ A VM is not actually different from a Linker, we just decided
 VM was a better name at some point.
 
 """
+from __future__ import absolute_import, print_function, division
+
 from . import link
 from collections import defaultdict
 import logging
@@ -13,8 +15,7 @@ import sys
 import time
 import warnings
 
-from theano.configparser import (config, AddConfigVar,
-                                 BoolParam, ConfigParam, _config_var_list)
+from theano.configparser import (config, _config_var_list)
 
 import theano.gof.cmodule
 
@@ -22,39 +23,6 @@ from six import iteritems, itervalues
 from six.moves import xrange
 
 logger = logging.getLogger(__name__)
-
-AddConfigVar('profile',
-             "If VM should collect profile information",
-             BoolParam(False),
-             in_c_key=False)
-AddConfigVar('profile_optimizer',
-             "If VM should collect optimizer profile information",
-             BoolParam(False),
-             in_c_key=False)
-AddConfigVar('profile_memory',
-             "If VM should collect memory profile information and print it",
-             BoolParam(False),
-             in_c_key=False)
-
-
-def filter_vm_lazy(val):
-    if val == 'False' or val is False:
-        return False
-    elif val == 'True' or val is True:
-        return True
-    elif val == 'None' or val is None:
-        return None
-    else:
-        raise ValueError('Valid values for an vm.lazy parameter '
-                         'should be None, False or True, not `%s`.' % val)
-
-AddConfigVar('vm.lazy',
-             "Useful only for the vm linkers. When lazy is None,"
-             " auto detect if lazy evaluation is needed and use the apropriate"
-             " version. If lazy is True/False, force the version used between"
-             " Loop/LoopGC and Stack.",
-             ConfigParam('None', filter_vm_lazy),
-             in_c_key=False)
 
 
 def calculate_reallocate_info(order, fgraph, storage_map, compute_map_re,
@@ -428,7 +396,7 @@ class Stack(VM):
             )
         return rval, dt
 
-    def __call__(self):
+    def __call__(self, output_subset=None):
         storage_map = self.storage_map
         compute_map = self.compute_map
         thunks = self.thunks
@@ -440,7 +408,13 @@ class Stack(VM):
             compute_map[k][0] = (k.owner is None)
 
         # apply_stack contains nodes
-        apply_stack = list(self.base_apply_stack)
+        if output_subset is not None:
+            apply_stack =\
+                [self.outputs[i].owner for i in output_subset
+                    if self.outputs[i].owner]
+        else:
+            apply_stack = list(self.base_apply_stack)
+
         last_apply_stack_len = -1
 
         # This record all function inputs/shared varibles and constants
@@ -714,11 +688,15 @@ class VM_Linker(link.LocalLinker):
     c_thunks
         If None or True, don't change the default. If False,
         don't compile c code for the thunks.
+    allow_partial_eval
+        If True, enforces usage of Stack or CVM, to allow for partial
+        evaluation of functions (calculating a subset of outputs).
 
     """
 
     def __init__(self, allow_gc=None, use_cloop=False, callback=None,
-                 lazy=None, schedule=None, c_thunks=None):
+                 lazy=None, schedule=None, c_thunks=None,
+                 allow_partial_eval=None):
         # Note: if more parameters are added to __init__, make sure to forward
         # them in the "type(self)(...)" call in the "accept" method below.
         if allow_gc is None:
@@ -729,6 +707,7 @@ class VM_Linker(link.LocalLinker):
         self.callback = callback
         self.lazy = lazy
         self.c_thunks = c_thunks
+        self.allow_partial_eval = allow_partial_eval
         self.updated_vars = {}
         if schedule:
             self.schedule = schedule
@@ -843,13 +822,18 @@ class VM_Linker(link.LocalLinker):
         pre_call_clear = [storage_map[v] for v in self.no_recycling]
 
         if (self.callback is not None or
-                (config.profile and config.profile_memory)):
+                (config.profile and config.profile_memory) or
+                getattr(self, 'allow_partial_eval', False)):
 
             if self.use_cloop and self.callback is not None:
                 logger.warn('CVM does not support callback, using Stack VM.')
             if self.use_cloop and config.profile_memory:
                 warnings.warn(
                     'CVM does not support memory profile, using Stack VM.')
+            if self.use_cloop and getattr(self, 'allow_partial_eval', False):
+                warnings.warn(
+                    'CVM does not support partial evaluation yet, '
+                    'using Stack VM.')
             # Needed for allow_gc=True, profiling and storage_map reuse
             deps = self.compute_gc_dependencies(storage_map)
             vm = Stack(

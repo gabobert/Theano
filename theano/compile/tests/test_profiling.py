@@ -2,6 +2,8 @@
 Test of memory profiling
 
 """
+from __future__ import absolute_import, print_function, division
+
 import unittest
 
 import numpy
@@ -44,7 +46,7 @@ class Test_profiling(unittest.TestCase):
                                 mode=m)
 
             inp = [numpy.arange(1024, dtype='float32') + 1 for i in range(len(x))]
-            output = f(*inp)
+            f(*inp)
 
             buf = StringIO()
             f.profile.summary(buf)
@@ -54,13 +56,16 @@ class Test_profiling(unittest.TestCase):
             lines1 = [l for l in the_string.split("\n") if "Max if linker" in l]
             lines2 = [l for l in the_string.split("\n") if "Minimum peak" in l]
             if theano.config.device == 'cpu':
-                assert "Max if linker=cvm(default): 4112KB (8204KB)" in the_string, (
-                    lines1, lines2)
+                assert "CPU: 4112KB (8204KB)" in the_string, (lines1, lines2)
+                assert "CPU: 8204KB (12296KB)" in the_string, (lines1, lines2)
+                assert "CPU: 8208KB" in the_string, (lines1, lines2)
                 assert "Minimum peak from all valid apply node order is 4104KB" in the_string, (
                     lines1, lines2)
             else:
-                assert "Max if linker=cvm(default): 8220KB (8220KB)" in the_string, (
-                    lines1, lines2)
+                assert "CPU: 16KB (16KB)" in the_string, (lines1, lines2)
+                assert "GPU: 8204KB (8204KB)" in the_string, (lines1, lines2)
+                assert "GPU: 12300KB (12300KB)" in the_string, (lines1, lines2)
+                assert "GPU: 8212KB" in the_string, (lines1, lines2)
                 assert "Minimum peak from all valid apply node order is 4116KB" in the_string, (
                     lines1, lines2)
 
@@ -68,7 +73,6 @@ class Test_profiling(unittest.TestCase):
             theano.config.profile = config1
             theano.config.profile_memory = config2
             theano.config.profiling.min_peak_memory = config3
-
 
     def test_ifelse(self):
         config1 = theano.config.profile
@@ -98,7 +102,7 @@ class Test_profiling(unittest.TestCase):
             big_mat1 = 10
             big_mat2 = 11
 
-            out = f_ifelse(val1, val2, big_mat1, big_mat2)
+            f_ifelse(val1, val2, big_mat1, big_mat2)
 
         finally:
             theano.config.profile = config1

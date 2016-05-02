@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 import time
 import unittest
 
@@ -872,8 +872,6 @@ def test_hostfromgpu_shape_i():
     assert tuple(f(cv)) == (5, 4)
 
 # -----------------------------------------------------------------------
-
-import theano.sandbox.cuda as cuda_ndarray
 
 
 def test_gpujoin_assert_cndas():

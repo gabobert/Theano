@@ -4,7 +4,7 @@ Contains the FunctionGraph class and exception
 types that it can raise.
 
 """
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 import sys
 import time
 import traceback
@@ -49,8 +49,19 @@ class MissingInputError(Exception):
     A symbolic input needed to compute the outputs is missing.
 
     """
-
-    pass
+    def __init__(self, *args, **kwargs):
+        if kwargs:
+            # The call to list is needed for Python 3
+            assert list(kwargs.keys()) == ["variable"]
+            tr = getattr(list(kwargs.values())[0].tag, 'trace', [])
+            if type(tr) is list and len(tr) > 0:
+                sio = StringIO()
+                print("\nBacktrace when the variable is created:", file=sio)
+                for subtr in list(kwargs.values())[0].tag.trace:
+                    traceback.print_list(subtr, sio)
+                args = args + (str(sio.getvalue()),)
+        s = '\n'.join(args)  # Needed to have the new line print correctly
+        Exception.__init__(self, s)
 
 
 class FunctionGraph(utils.object2):
@@ -172,8 +183,6 @@ class FunctionGraph(utils.object2):
         for i, output in enumerate(outputs):
             output.clients.append(('output', i))
 
-        self.node_locks = {}
-        self.variable_locks = {}
         self.profile = None
         self.update_mapping = update_mapping
 
@@ -221,17 +230,14 @@ class FunctionGraph(utils.object2):
 
     def disown(self):
         """
-        WRITEME
         Cleans up all of this FunctionGraph's nodes and variables so they are
         not associated with this FunctionGraph anymore.
 
         The FunctionGraph should not be used anymore after disown is called.
 
-        This may not clean everything this FunctionGraph's features set in the
-        nodes and variables. If there are no features, this should set
-        them back to what they were originally.
-
         """
+        for f in self._features:
+            self.remove_feature(f)
         for apply_node in self.apply_nodes:
             del apply_node.fgraph
             del apply_node.deps
@@ -242,6 +248,8 @@ class FunctionGraph(utils.object2):
         self.variables = set()
         self.inputs = None
         self.outputs = None
+        self.profile = None
+        self.update_mapping = None
 
     # clients #
     def clients(self, r):
@@ -367,7 +375,7 @@ class FunctionGraph(utils.object2):
             if isinstance(variable.type, NullType):
                 raise TypeError("Computation graph contains a NaN. " +
                                 variable.type.why_null)
-            raise MissingInputError("Undeclared input", variable)
+            raise MissingInputError("Undeclared input", variable=variable)
         if not getattr(variable, 'fgraph', None) is self:
             self.__setup_r__(variable)
         self.variables.add(variable)
@@ -395,78 +403,6 @@ class FunctionGraph(utils.object2):
                     if (r.owner is None and
                             not isinstance(r, graph.Constant) and
                             r not in self.inputs):
-                        # Verbose error message
-                        # Show a complete chain of variables from the missing input to an output
-                        if config.exception_verbosity == 'high':
-
-                            def find_path_to(output_var, input_var):
-                                """
-                                Returns a list of each variable on a (not
-                                necessarily unique) path from input_var to
-                                output_var, where each variable in the list has
-                                the preceding variable as one of its inputs.
-                                Returns None if no path exists.
-
-                                """
-                                # If output and input are the same we have a singleton path
-                                if output_var is input_var:
-                                    return [output_var]
-
-                                # If output has no inputs then there is no path
-                                owner = output_var.owner
-
-                                if owner is None:
-                                    return None
-
-                                # If input_var is an input to the output node, there is a
-                                # simple two element path
-                                inputs = owner.inputs
-
-                                if input_var in inputs:
-                                    return [input_var, output_var]
-
-                                # Otherwise we must recurse by searching for a path to one
-                                # of our inputs, then appending the output to that path
-                                for ipt in inputs:
-                                    path = find_path_to(ipt, input_var)
-
-                                    if path is not None:
-                                        path.append(output_var)
-
-                                        return path
-
-                                # Since none of the above methods returned a path, there is none
-                                return None
-
-                            # Try different outputs until we find one that has a path to the missing input
-                            for output in self.outputs:
-                                path = find_path_to(output, r)
-
-                                if path is not None:
-                                    break
-
-                            # if there is no path then r isn't really a graph input so we shouldn't be running error
-                            # handler code in the first place
-                            assert path is not None
-                            tr = getattr(r.tag, 'trace', [])
-                            detailed_err_msg = ""
-                            if type(tr) is list and len(tr) > 0:
-                                detailed_err_msg += "\nBacktrace when the variable is created:\n"
-
-                                # Print separate message for each element in
-                                # the list of batcktraces
-                                sio = StringIO()
-                                for subtr in tr:
-                                    traceback.print_list(subtr, sio)
-                                detailed_err_msg += str(sio.getvalue())
-                            raise MissingInputError(
-                                'A variable that is an input to the graph was '
-                                'neither provided as an input to the function '
-                                'nor given a value. A chain of variables '
-                                'leading from this input to an output is %s. '
-                                'This chain may not be unique' % str(path) +
-                                detailed_err_msg)
-
                         # Standard error message
                         raise MissingInputError((
                             "An input of the graph, used to compute %s, "
@@ -474,7 +410,7 @@ class FunctionGraph(utils.object2):
                             "Use the Theano flag exception_verbosity='high',"
                             "for more information on this error."
                             % str(node)),
-                            r)
+                            variable=r)
 
         for node in new_nodes:
             assert node not in self.apply_nodes

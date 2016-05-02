@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import unittest
 from theano.tests import unittest_tools as utt
 
@@ -165,7 +166,7 @@ def test_argsort():
 
     # Example 2
     a = tensor.dmatrix()
-    axis = tensor.scalar()
+    axis = tensor.lscalar()
     w = argsort(a, axis)
     f = theano.function([a, axis], w)
     for axis_val in 0, 1:
@@ -183,7 +184,7 @@ def test_argsort():
 
     # Example 4
     a = tensor.dmatrix()
-    axis = tensor.scalar()
+    axis = tensor.lscalar()
     l = argsort(a, axis, "mergesort")
     f = theano.function([a, axis], l)
     for axis_val in 0, 1:
@@ -193,7 +194,7 @@ def test_argsort():
 
     # Example 5
     a = tensor.dmatrix()
-    axis = tensor.scalar()
+    axis = tensor.lscalar()
     a1 = ArgSortOp("mergesort", [])
     a2 = ArgSortOp("quicksort", [])
     # All the below should give true

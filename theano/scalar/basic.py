@@ -9,7 +9,7 @@ what you are doing!
 If you want to use a scalar variable in a Theano graph,
 you probably want to use theano.tensor.[c,z,f,d,b,w,i,l,]scalar!
 """
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 
 from itertools import chain
 import math
@@ -21,7 +21,7 @@ import numpy
 from six.moves import xrange
 
 import theano
-from theano.compat import PY3, imap, izip
+from theano.compat import imap, izip
 from theano import gof, printing
 from theano.gof import (Op, utils, Variable, Constant, Type, Apply,
                         FunctionGraph)
@@ -199,7 +199,11 @@ class Scalar(Type):
                 type(data), data, self.dtype), e)
 
     def values_eq_approx(self, a, b, tolerance=1e-4):
-        return abs(a - b) <= ((abs(a) + abs(b)) * tolerance)
+        # The addition have risk of overflow especially with [u]int8
+        diff = a - b
+        if diff == 0:
+            return True
+        return abs(diff) <= (abs(a) * tolerance) + (abs(b) * tolerance)
 
     def c_headers(self, c_compiler):
         l = ['<math.h>']
@@ -600,12 +604,11 @@ class _scalar_py_operators:
     def __mul__(self, other):
         return mul(self, other)
 
-    if PY3:
-        def __truediv__(self, other):
-            return div_proxy(self, other)
-    else:
-        def __div__(self, other):
-            return div_proxy(self, other)
+    def __truediv__(self, other):
+        return div_proxy(self, other)
+
+    def __div__(self, other):
+        return div_proxy(self, other)
 
     def __floordiv__(self, other):
         return int_div(self, other)
@@ -1148,7 +1151,13 @@ class IsNan(FixedLogicalComparison):
         (z,) = outputs
         if node.inputs[0].type in complex_types:
             raise NotImplementedError()
-        return "%(z)s = isnan(%(x)s);" % locals()
+        # Windows tries to be different and sometimes return -1, but we want
+        # to be consistent with numpy (which returns True), hence the "abs".
+        return "%(z)s = abs(isnan(%(x)s));" % locals()
+
+    def c_code_cache_version(self):
+        scalarop_version = super(IsNan, self).c_code_cache_version()
+        return tuple(scalarop_version) + (2,)
 isnan = IsNan()
 
 
@@ -1606,13 +1615,13 @@ def int_or_true_div(x_discrete, y_discrete):
                 "please use x // y for an integer division.",
                 DeprecationWarning,
                 stacklevel=4)
-            return 'int'
+            return int_div
         elif config.int_division == 'floatX':
-            return 'true'
+            return true_div
         else:
             raise NotImplementedError(config.int_division)
     else:
-        return 'true'
+        return true_div
 
 
 def div_proxy(x, y):
@@ -1620,8 +1629,8 @@ def div_proxy(x, y):
     Proxy for either true_div or int_div, depending on types of x, y.
 
     """
-    f = eval('%s_div' % int_or_true_div(as_scalar(x).type in discrete_types,
-                                        as_scalar(y).type in discrete_types))
+    f = int_or_true_div(as_scalar(x).type in discrete_types,
+                        as_scalar(y).type in discrete_types)
     return f(x, y)
 
 
@@ -1667,7 +1676,7 @@ class TrueDiv(BinaryScalarOp):
         # This is different from it not being connected
         # to the output; x/y is still a function of x
         # and y; it's just a step function.
-        if (x / y).type in discrete_types:
+        if all(a.dtype in discrete_types for a in (x, y)):
             return [x.zeros_like(), y.zeros_like()]
 
         first_part = gz / y
@@ -2390,9 +2399,19 @@ round_half_away_from_zero = RoundHalfAwayFromZero(same_out_float_only)
 
 
 class Neg(UnaryScalarOp):
+    # We can use numpy.negative here, because even if it gives unexpected
+    # results on Boolean arrays, it will be passed other dtypes as Theano
+    # does not have a Boolean type for tensors.
     nfunc_spec = ('negative', 1, 1)
 
     def impl(self, x):
+        # We have to make sure x is not a numpy.bool_, because
+        # `-numpy.bool_(True)` is `False` (we want 0), and
+        # `-numpy.bool_(False)` is `True` (we want 1).
+        # This happens for Composite, as the intermediate results are not
+        # casted in the dtype of the intermediate variable in general.
+        if isinstance(x, numpy.bool_):
+            x = numpy.int8(x)
         return -x
 
     def grad(self, inputs, gout):

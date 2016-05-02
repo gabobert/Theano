@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import logging
 import six.moves.cPickle as pickle
 
@@ -10,18 +11,16 @@ class CallCache(object):
         try:
             if filename is None:
                 raise IOError('bad filename')  # just goes to except
-            f = open(filename, 'r')
-            self.cache = pickle.load(f)
-            f.close()
+            with open(filename, 'r') as f:
+                self.cache = pickle.load(f)
         except IOError:
             self.cache = {}
 
     def persist(self, filename=None):
         if filename is None:
             filename = self.filename
-        f = open(filename, 'w')
-        pickle.dump(self.cache, f)
-        f.close()
+        with open(filename, 'w') as f:
+            pickle.dump(self.cache, f)
 
     def call(self, fn, args=(), key=None):
         if key is None:

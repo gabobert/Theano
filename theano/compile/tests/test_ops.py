@@ -1,6 +1,8 @@
 """
  Tests for the Op decorator
 """
+from __future__ import absolute_import, print_function, division
+
 import numpy as np
 
 from theano.tests import unittest_tools as utt
@@ -16,7 +18,7 @@ import pickle
 # reachable from pickle (as in it cannot be defined inline)
 @as_op([dmatrix, dmatrix], dmatrix)
 def mul(a, b):
-    return a*b
+    return a * b
 
 
 class OpDecoratorTests(utt.InferShapeTester):

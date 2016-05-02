@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 import operator
 import sys
 import unittest
@@ -31,6 +31,15 @@ from theano.scalar.basic_scipy import erfinv
 
 from theano.tensor.nnet.blocksparse import sparse_block_dot
 from theano.sandbox.cuda.blocksparse import GpuSparseBlockGemv, GpuSparseBlockOuter
+
+imported_scipy_special = False
+try:
+    import scipy.special
+    imported_scipy_special = True
+# Importing scipy.special may raise ValueError.
+# See http://projects.scipy.org/scipy/ticket/1739
+except (ImportError, ValueError):
+    pass
 
 
 if theano.config.mode == 'FAST_COMPILE':
@@ -97,6 +106,16 @@ def test_local_gpu_contiguous_gpu_contiguous():
                      if isinstance(node.op, basic_ops.GpuContiguous)])
     assert 1 == len([node for node in f2.maker.fgraph.toposort()
                      if isinstance(node.op, basic_ops.GpuContiguous)])
+
+
+def test_local_gpu_contiguous():
+    a = tensor.fmatrix()
+    o = tensor.extra_ops.cpu_contiguous(a)
+    for o in [o, cuda.gpu_from_host(o)]:
+        f = theano.function([a], o, mode=mode_with_gpu)
+        assert 1 == len([node for node in f.maker.fgraph.toposort()
+                         if isinstance(node.op, basic_ops.GpuContiguous)])
+        f([[2.]])
 
 
 def test_local_assert_no_cpu_op():
@@ -297,6 +316,21 @@ def test_opt_gpujoin_onlyajoin():
 
     assert isinstance(graph_nodes[-1].op, cuda.HostFromGpu)
     assert isinstance(graph_nodes[-2].op, cuda.GpuJoin)
+
+    assert numpy.all(f() == numpy.concatenate([_a, _b], axis=1))
+
+    # test mixed dtype
+    _b = numpy.asarray([[5, 6, 7], [8, 9, 10]], dtype='float64')
+    b = theano.tensor.constant(_b)
+
+    c = tensor.join(1, a, b)
+
+    f = theano.function([], c, mode=mode_with_gpu)
+
+    f()
+
+    graph_nodes = f.maker.fgraph.toposort()
+    assert isinstance(graph_nodes[-1].op, theano.tensor.Join)
 
     assert numpy.all(f() == numpy.concatenate([_a, _b], axis=1))
 
@@ -738,7 +772,8 @@ def test_erfinvgpu():
     assert isinstance(f.maker.fgraph.toposort()[1].op.scalar_op,
                       cuda.elemwise.ErfinvGPU)
     xv = numpy.random.rand(7, 8).astype('float32')
-    assert numpy.allclose(f(xv), f2(xv))
+    if imported_scipy_special:
+        assert numpy.allclose(f(xv), f2(xv))
 
 
 def test_local_gpu_solve():
@@ -808,7 +843,8 @@ def test_blocksparse_gpu_gemv_opt():
 
     f = theano.function([W, h, iIdx, b, oIdx], o, mode=mode_with_gpu)
 
-    assert isinstance(f.maker.fgraph.toposort()[-2].op, GpuSparseBlockGemv)
+    assert sum(1 for n in f.maker.fgraph.apply_nodes
+               if isinstance(n.op, GpuSparseBlockGemv)) == 1
 
 
 def test_blocksparse_gpu_outer_opt():
@@ -824,7 +860,8 @@ def test_blocksparse_gpu_outer_opt():
                                                                wrt=W)],
                         mode=mode_with_gpu)
 
-    assert isinstance(f.maker.fgraph.toposort()[-2].op, GpuSparseBlockOuter)
+    assert sum(1 for n in f.maker.fgraph.apply_nodes
+               if isinstance(n.op, GpuSparseBlockOuter)) == 1
 
 
 class test_diag(theano.tensor.tests.test_nlinalg.test_diag):
@@ -843,6 +880,20 @@ class Test_GpuReshape(test_opt.Test_Reshape):
         self.mode = mode_with_gpu
         self.op = basic_ops.GpuReshape
 
+
+def test_local_abstractconv_gemm():
+    """ We test it here as this is the optimization only that we test.
+    This test gh-4036"""
+    image = tensor.ftensor4()
+    W = tensor.ftensor4()
+    conv = tensor.nnet.conv2d(image,
+                         W,
+                         input_shape=(1, 32, 32, 32),
+                         filter_shape=(32, 32, 3, 3),
+                         border_mode='half')
+    f = theano.function([image, W], [conv], mode=mode_with_gpu)
+    f(numpy.random.rand(1, 32, 32, 32).astype('float32'),
+      numpy.random.rand(32, 32, 3, 3).astype('float32'))
 
 if __name__ == '__main__':
     test_gpualloc()

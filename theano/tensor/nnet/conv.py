@@ -3,12 +3,12 @@ Contains an Op for convolving input images with a set of filters. This was
 developed especially for Convolutional Neural Networks.
 
 For related ops, including downsampling and subsampling, see
-tensor.signal and tensor.signal.downsample.
+tensor.signal and tensor.signal.pool.
 
 See especially conv2d().
 """
 
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 
 import logging
 
@@ -40,6 +40,7 @@ _logger = logging.getLogger("theano.tensor.nnet.conv")
 def conv2d(input, filters, image_shape=None, filter_shape=None,
            border_mode='valid', subsample=(1, 1), **kargs):
     """
+    Deprecated, old conv2d interface.
     This function will build the symbolic graph for convolving a stack of
     input images with a set of filters. The implementation is modelled after
     Convolutional Neural Networks (CNN). It is simply a wrapper to the ConvOp
@@ -128,7 +129,8 @@ def conv2d(input, filters, image_shape=None, filter_shape=None,
 
     if image_shape and filter_shape:
         try:
-            assert image_shape[1] == filter_shape[1]
+            if image_shape[1] is not None and filter_shape[1] is not None:
+                assert image_shape[1] == filter_shape[1]
         except Exception:
             print('image ', image_shape, ' filters ', filter_shape)
             raise
@@ -793,13 +795,16 @@ class ConvOp(OpenMPOp):
         val = _valfrommode(self.out_mode)
         bval = _bvalfromboundary('fill')
 
-        for b in xrange(bsize):
-            for n in xrange(nkern):
-                zz[b, n, ...].fill(0)
-                for im0 in xrange(stacklen):
-                    zz[b, n, ...] += _convolve2d(img2d[b, im0, ...],
-                                                 filtersflipped[n, im0, ...],
-                                                 1, val, bval, 0)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', numpy.ComplexWarning)
+            for b in xrange(bsize):
+                for n in xrange(nkern):
+                    zz[b, n, ...].fill(0)
+                    for im0 in xrange(stacklen):
+                        # some cast generates a warning here
+                        zz[b, n, ...] += _convolve2d(img2d[b, im0, ...],
+                                                     filtersflipped[n, im0, ...],
+                                                     1, val, bval, 0)
 
         if False:
             if False and self.out_mode == "full":

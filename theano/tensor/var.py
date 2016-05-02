@@ -1,8 +1,10 @@
+from __future__ import absolute_import, print_function, division
 import copy
 import traceback as tb
 import warnings
 
 import numpy
+from six import integer_types
 from six.moves import xrange
 
 import theano
@@ -319,7 +321,7 @@ class _tensor_py_operators(object):
         """
 
         if ndim is not None:
-            if not isinstance(ndim, int):
+            if not isinstance(ndim, integer_types):
                 raise ValueError("Expected ndim to be an integer, is " +
                                  str(type(ndim)))
 
@@ -522,8 +524,11 @@ class _tensor_py_operators(object):
                         counter += 1
                         new_args.append(arg)
                 view = self.dimshuffle(pattern)
-                rval = view.__getitem__(tuple(new_args))
-                return rval
+                check_rval = [arg == slice(None, None, None) for arg in new_args]
+                if all(check_rval) == True:
+                    return view
+                else:
+                    return view.__getitem__(tuple(new_args))
             else:
                 return theano.tensor.subtensor.Subtensor(args)(
                     self, *theano.tensor.subtensor.Subtensor.collapse(
@@ -591,15 +596,19 @@ class _tensor_py_operators(object):
                                         dtype=dtype, keepdims=keepdims,
                                         acc_dtype=acc_dtype)
 
-    def norm(self, L, axis=None):
+    def norm(self, L, axis=None, keepdims=False):
         if L == 0:
             raise NotImplementedError()
         if numpy.isinf(L):
             raise NotImplementedError()
         # optimizations will/should catch cases like L=1, L=2
-        return theano.tensor.basic.pow(
+        y = theano.tensor.basic.pow(
             theano.tensor.basic.pow(
                 theano.tensor.basic.abs_(self), L).sum(axis=axis), 1.0 / L)
+        if keepdims:
+            return theano.tensor.basic.makeKeepDims(self, y, axis)
+        else:
+            return y
 
     def mean(self, axis=None, dtype=None, keepdims=False, acc_dtype=None):
         """See `theano.tensor.mean`."""
@@ -682,6 +691,9 @@ class _tensor_py_operators(object):
 
     def cumprod(self, axis=None):
         return theano.tensor.extra_ops.cumprod(self, axis)
+
+    def searchsorted(self, v, side='left', sorter=None):
+        return theano.tensor.extra_ops.searchsorted(self, v, side, sorter)
 
     def ptp(self, axis=None):
         """See 'theano.tensor.ptp'."""
@@ -865,12 +877,12 @@ class TensorConstant(_tensor_py_operators, Constant):
     """
     def __init__(self, type, data, name=None):
         Constant.__init__(self, type, data, name)
-        if (isinstance(data, numpy.ndarray) and
-                data.ndim > 0 and
-                len(numpy.unique(data)) == 1):
-            self.tag.unique_value = numpy.unique(data)[0]
-        else:
-            self.tag.unique_value = None
+        self.tag.unique_value = None
+        if isinstance(data, numpy.ndarray) and data.ndim > 0:
+            flat_data = data.ravel()
+            if flat_data.shape[0]:
+                if (flat_data == flat_data[0]).all():
+                    self.tag.unique_value = flat_data[0]
 
     def __str__(self):
         if self.tag.unique_value is not None:

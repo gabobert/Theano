@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import six.moves.cPickle as pickle
 import os
 import shutil
@@ -18,9 +19,8 @@ def test_function_dump():
         tmpdir = tempfile.mkdtemp()
         fname = os.path.join(tmpdir, 'test_function_dump.pkl')
         theano.function_dump(fname, [v], v + 1)
-        f = open(fname, 'rb')
-        l = pickle.load(f)
-        f.close()
+        with open(fname, 'rb') as f:
+            l = pickle.load(f)
     finally:
         if tmpdir is not None:
             shutil.rmtree(tmpdir)

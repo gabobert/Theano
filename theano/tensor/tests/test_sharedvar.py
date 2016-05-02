@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import numpy
 import unittest
 import warnings
@@ -316,7 +317,7 @@ def makeSharedTester(shared_constructor_,
             if dtype is None:
                 dtype = theano.config.floatX
 
-            shp = (100/4, 1024)  # 100KB
+            shp = (100//4, 1024)  # 100KB
 
             x = numpy.zeros(shp, dtype=dtype)
             x = self.cast_value(x)

@@ -4,6 +4,7 @@ Utility classes and methods to pickle parts of symbolic graph.
 These pickled graphs can be used, for instance, as cases for
 unit tests or regression tests.
 """
+from __future__ import absolute_import, print_function, division
 import numpy
 import os
 import pickle
@@ -43,6 +44,8 @@ Pickler = pickle.Pickler
 class StripPickler(Pickler):
     """
     Subclass of Pickler that strips unnecessary attributes from Theano objects.
+
+    .. versionadded:: 0.8
 
     Example of use::
 
@@ -117,15 +120,20 @@ if PY3:
         """
         Allow to reload in python 3 some pickled numpy ndarray.
 
+        .. versionadded:: 0.8
+
         Examples
         --------
 
-        with open(fname, 'rb') as fp:
-            if PY3:
-                u = CompatUnpickler(fp, encoding="latin1")
-            else:
-                u = CompatUnpickler(fp)
-            mat = u.load()
+        ::
+
+            with open(fname, 'rb') as fp:
+                if PY3:
+                    u = CompatUnpickler(fp, encoding="latin1")
+                else:
+                    u = CompatUnpickler(fp)
+                mat = u.load()
+
         """
         pass
 
@@ -136,16 +144,20 @@ else:
         """
         Allow to reload in python 3 some pickled numpy ndarray.
 
+        .. versionadded:: 0.8
+
         Examples
         --------
 
-        with open(fname, 'rb') as fp:
-            if PY3:
-                u = CompatUnpickler(fp, encoding="latin1")
-            else:
-                u = CompatUnpickler(fp)
+        ::
 
-            mat = u.load()
+            with open(fname, 'rb') as fp:
+                if PY3:
+                    u = CompatUnpickler(fp, encoding="latin1")
+                else:
+                    u = CompatUnpickler(fp)
+                mat = u.load()
+
         """
         pass
 
@@ -263,10 +275,14 @@ class PersistentNdarrayLoad(object):
     """
     def __init__(self, zip_file):
         self.zip_file = zip_file
+        self.cache = {}
 
     def __call__(self, persid):
         array_type, name = persid.split('.')
 
+        if name in self.cache:
+            return self.cache[name]
+        ret = None
         array = numpy.lib.format.read_array(self.zip_file.open(name))
         if array_type == 'cuda_ndarray':
             if config.experimental.unpickle_gpu_on_cpu:
@@ -274,14 +290,16 @@ class PersistentNdarrayLoad(object):
                 warnings.warn("config.experimental.unpickle_gpu_on_cpu is set "
                               "to True. Unpickling CudaNdarray as "
                               "numpy.ndarray")
-                return array
+                ret = array
             elif cuda_ndarray:
-                return cuda_ndarray.cuda_ndarray.CudaNdarray(array)
+                ret = cuda_ndarray.cuda_ndarray.CudaNdarray(array)
             else:
                 raise ImportError("Cuda not found. Cannot unpickle "
                                   "CudaNdarray")
         else:
-            return array
+            ret = array
+        self.cache[name] = ret
+        return ret
 
 
 def dump(obj, file_handler, protocol=DEFAULT_PROTOCOL,
@@ -305,6 +323,7 @@ def dump(obj, file_handler, protocol=DEFAULT_PROTOCOL,
         separate NPY file inside of the zip file.
     :type persistent_id: callable
 
+    .. versionadded:: 0.8
 
     .. note::
         The final file is simply a zipped file containing at least one file,
@@ -315,13 +334,13 @@ def dump(obj, file_handler, protocol=DEFAULT_PROTOCOL,
     >>> import theano
     >>> foo_1 = theano.shared(0, name='foo')
     >>> foo_2 = theano.shared(1, name='foo')
-    >>> with open('model.zip', 'w') as f:
+    >>> with open('model.zip', 'wb') as f:
     ...     dump((foo_1, foo_2, numpy.array(2)), f)
     >>> numpy.load('model.zip').keys()
     ['foo', 'foo_2', 'array_0', 'pkl']
     >>> numpy.load('model.zip')['foo']
     array(0)
-    >>> with open('model.zip') as f:
+    >>> with open('model.zip', 'rb') as f:
     ...     foo_1, foo_2, array = load(f)
     >>> array
     array(2)
@@ -347,6 +366,7 @@ def load(f, persistent_load=PersistentNdarrayLoad):
         used when pickling.
     :type persistent_load: callable, optional
 
+    .. versionadded:: 0.8
     """
     with closing(zipfile.ZipFile(f, 'r')) as zip_file:
         p = pickle.Unpickler(BytesIO(zip_file.open('pkl').read()))
