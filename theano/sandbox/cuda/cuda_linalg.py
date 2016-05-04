@@ -5,9 +5,11 @@ import theano
 from theano.sandbox.cuda.type import CudaNdarrayType
 from theano.sandbox.cuda import GpuOp
 from theano.sandbox.cuda.basic_ops import as_cuda_ndarray_variable
+from theano.sandbox.cuda.fftconv import ScikitsCudaOp
+from skcuda.rlinalg import rsvd
 
 try:
-    from theano.sandbox.cuda import cuda_ndarray
+    from theano.sandbox.cuda import cuda_ndarray, basic_ops, CudaNdarray
     dimshuffle = cuda_ndarray.cuda_ndarray.dimshuffle
 except ImportError:
     pass
@@ -23,7 +25,7 @@ except (ImportError, OSError, RuntimeError, pkg_resources.DistributionNotFound):
 cula_initialized = False
 
 
-class GpuSolve(GpuOp):
+class GpuRSVD(ScikitsCudaOp):
     """
     CULA GPU solver OP.
 
@@ -36,108 +38,62 @@ class GpuSolve(GpuOp):
 
     __props__ = ('trans',)
 
-    def __init__(self, trans='N'):
-        self.trans = trans
-        super(GpuSolve, self).__init__()
+    def __init__(self, method='standard', k=None, p=0,q=0):
+        self.method = method
+        self.k=k
+        self.p=p
+        self.q=q
+        super(GpuRSVD, self).__init__()
 
     def output_type(self, inp):
         return CudaNdarrayType(broadcastable=[False] * inp.type.ndim)
 
-    def make_node(self, inp1, inp2):
-        inp1 = as_cuda_ndarray_variable(inp1)
-        inp2 = as_cuda_ndarray_variable(inp2)
+    def make_node(self, inp):
+        inp = basic_ops.gpu_contiguous(
+            basic_ops.as_cuda_ndarray_variable(inp))
 
-        assert inp1.ndim == 2
-        assert inp2.ndim == 2
-        return theano.Apply(self, [inp1, inp2], [self.output_type(inp1)()])
+        assert inp.dtype == "float32"
 
-    def make_thunk(self,
-                   node,
-                   storage_map, _,
-                   no_recycling=[]):
+        return theano.Apply(self, [inp], [self.output_type(inp)(), CudaNdarrayType(broadcastable=[False] * 1)(), self.output_type(inp)()])
 
-        # Initialize CULA the first time it is needed
-        global cula_initialized
+    def make_thunk(self, node, storage_map, _, _2):
+        super(GpuRSVD, self).make_thunk(node, storage_map, _, _2)
 
-        if not cula_available:
-            raise RuntimeError('Cula is not available and '
-                               'GpuSolve Op can not be constructed.')
-
-        if not cula_initialized:
-            cula.culaInitialize()
-            cula_initialized = True
-
+        from theano.misc.pycuda_utils import to_gpuarray
         inputs = [storage_map[v] for v in node.inputs]
         outputs = [storage_map[v] for v in node.outputs]
 
+
         def thunk():
-            # size of the matrices to invert
-            z = outputs[0]
+            input_shape = inputs[0][0].shape   # m, n
 
-            # Matrix
-            A = inputs[0][0]
+            # construct output shape
+            u_gpu_shape = (input_shape[0], self.k)
+            s_gpu_shape = (self.k,)
+            vt_gpu_shape = (self.k, input_shape[1])
 
-            # Solution vectors
-            b = inputs[1][0]
+            u_gpu = outputs[0]
+            s_gpu =outputs[1]
+            vt_gpu=outputs[2]
 
-            # A is not explicitly converted between C and F order, instead we
-            # switch the "transpose" flag
-            if self.trans in ('T', 'C'):
-                trans = 'N'
-            else:
-                trans = 'T'
+            # only allocate if there is no previous allocation of the
+            # right size.
+            for z, output_shape in ([u_gpu, u_gpu_shape], [s_gpu, s_gpu_shape], [vt_gpu, vt_gpu_shape]):
+                if z[0] is None or z[0].shape != output_shape:
+                    z[0] = CudaNdarray.zeros(output_shape)
 
-            # Convert b to F-order from c-order.
-            b_cpy = dimshuffle(b, (1, 0)).reshape((b.shape[0], b.shape[1]))
+            input_pycuda = to_gpuarray(inputs[0][0])
 
-            # This copy forces allocation of a new C-contiguous buffer
-            # and returns it.
-            A_cpy = A.copy()
-            b_cpy = b_cpy.copy()
+            u_gpu_pycuda = to_gpuarray(u_gpu[0])
+            s_gpu_pycuda = to_gpuarray(s_gpu[0])
+            vt_gpu_pycuda = to_gpuarray(vt_gpu[0])
 
-            def cula_gpu_solve(A_, b_, trans='T'):
-
-                A_shape = A_.shape
-                b_shape = b_.shape
-
-                assert(len(A_shape) == 2)
-                assert(len(b_shape) == 2)
-
-                if trans in ['T', 'C']:
-                    l, n = A_shape
-                    k, m = b_shape
-                    if n != k:
-                        raise ValueError('A and b must be aligned.')
-                elif trans in ['N']:
-                    n, l = A_shape
-                    k, m = b_shape
-                    if l != m:
-                        raise ValueError('A and b must be aligned.')
-                else:
-                    raise ValueError('Invalid value for trans')
-
-                lda = max(1, n)
-                ldb = max(1, n, l)
-
-                # construct pointer arrays needed for culaDeviceSgels
-                # Cula requires you to pass a pointer for A and b.
-                A_ptr = A_.gpudata
-                b_ptr = b_.gpudata
-
-                cula.culaDeviceSgels(trans, n, l, m, A_ptr, lda, b_ptr, ldb)
-                return A_, b_
-
-            A_pycuda, b_pycuda = cula_gpu_solve(A_cpy, b_cpy, trans)
-
-            # Convert b to F-order from c-order and assign it to output:
-            b_cpy = b_cpy.reshape(b.shape[::-1])
-            b_cpy = dimshuffle(b_cpy, (1, 0))
-            z[0] = b_cpy
-
+            u_gpu_pycuda[0], s_gpu_pycuda[0], vt_gpu_pycuda[0] = rsvd(input_pycuda, self.k, self.p, self.q, self.method)
+        
         thunk.inputs = inputs
         thunk.outputs = outputs
         thunk.lazy = False
 
         return thunk
 
-gpu_solve = GpuSolve()
+gpu_rsvd = GpuRSVD()
